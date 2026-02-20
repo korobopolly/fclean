@@ -1,0 +1,38 @@
+# fclean configuration example
+# Copy this file to rules.yaml and customize
+
+rules:
+  - name: "Old downloads"
+    paths:
+      - "~/Downloads"
+    older_than: "30d"
+
+  - name: "Large temp files"
+    paths:
+      - "~/Downloads"
+      - "/tmp"
+    larger_than: "100MB"
+    older_than: "7d"
+
+  - name: "Junk files"
+    paths:
+      - "~"
+    patterns:
+      - "*.tmp"
+      - "*.temp"
+      - "*.log"
+      - "*.bak"
+      - "~$*"
+      - "Thumbs.db"
+      - ".DS_Store"
+    skip_hidden: true
+
+  - name: "Old build artifacts"
+    paths:
+      - "~/Projects"
+    extensions:
+      - ".o"
+      - ".obj"
+      - ".pyc"
+      - ".class"
+    older_than: "14d"
