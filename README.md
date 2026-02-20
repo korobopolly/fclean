@@ -22,18 +22,52 @@
 
 - Python 3.10 이상
 
+### pipx를 이용한 설치 (권장)
+
+시스템 Python 환경을 오염시키지 않고 독립된 가상환경에 설치합니다:
+
+```bash
+# pipx 설치 (없는 경우)
+sudo apt install pipx   # Ubuntu/Debian
+brew install pipx        # macOS
+
+# fclean 설치
+pipx install fclean
+```
+
+> **PATH 설정**: 설치 후 `fclean` 명령이 인식되지 않으면 다음을 실행하세요:
+> ```bash
+> pipx ensurepath
+> source ~/.bashrc  # 또는 새 터미널 열기
+> ```
+
 ### pip를 이용한 설치
 
 ```bash
 pip install fclean
 ```
 
+> **참고**: Ubuntu 23.04+, Debian 12+ 등 최신 리눅스 배포판에서는 시스템 Python에 직접 설치가 차단됩니다 (`externally-managed-environment` 에러). 이 경우 위의 pipx 방법을 사용하거나, 가상환경을 생성하여 설치하세요:
+> ```bash
+> python3 -m venv ~/.venvs/fclean
+> source ~/.venvs/fclean/bin/activate
+> pip install fclean
+> ```
+
 ### 개발 모드 설치
 
 ```bash
-git clone <repository-url>
-cd file_remover
-pip install -e ".[dev]"
+git clone https://github.com/korobopolly/fclean.git
+cd fclean
+pip install -e ".[dev]"  # 가상환경 내에서 실행 권장
+```
+
+pipx로 개발 모드 설치도 가능합니다:
+
+```bash
+git clone https://github.com/korobopolly/fclean.git
+cd fclean
+pipx install -e .
 ```
 
 ## 빠른 시작
