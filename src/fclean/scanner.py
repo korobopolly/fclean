@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat as stat_mod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
@@ -77,6 +78,7 @@ def scan(
     skip_hidden: bool = False,
     respect_safelist: bool = True,
     on_progress: ProgressCallback | None = None,
+    workers: int = 1,
 ) -> ScanResult:
     """Scan a directory tree and collect file metadata.
 
@@ -86,23 +88,118 @@ def scan(
         skip_hidden: Whether to skip hidden files/directories (starting with '.').
         respect_safelist: Whether to skip system-protected paths.
         on_progress: Optional callback invoked every ~500 files with (file_count, total_size).
+        workers: Number of threads for parallel scanning. 1 = single-threaded (default).
     """
-    result = ScanResult()
+    if workers <= 1:
+        return _scan_single(root, follow_symlinks=follow_symlinks, skip_hidden=skip_hidden,
+                            respect_safelist=respect_safelist, on_progress=on_progress)
+    return _scan_parallel(root, follow_symlinks=follow_symlinks, skip_hidden=skip_hidden,
+                          respect_safelist=respect_safelist, on_progress=on_progress, workers=workers)
 
+
+def _process_entries(
+    result: ScanResult,
+    files: list[tuple[Path, os.stat_result | None]],
+    respect_safelist: bool,
+    on_progress: ProgressCallback | None,
+) -> None:
+    """Add file entries to result and fire progress callback."""
+    for file_path, st in files:
+        if respect_safelist and is_safe(file_path):
+            result.skipped_safe += 1
+            continue
+        if st is None:
+            result.error_count += 1
+            continue
+        result.files.append(FileInfo.from_stat(file_path, st))
+        result.total_size += st.st_size
+        if on_progress and result.file_count % _PROGRESS_INTERVAL == 0:
+            on_progress(result.file_count, result.total_size)
+
+
+def _scan_single(
+    root: Path,
+    *,
+    follow_symlinks: bool,
+    skip_hidden: bool,
+    respect_safelist: bool,
+    on_progress: ProgressCallback | None,
+) -> ScanResult:
+    """Original single-threaded scan path."""
+    result = ScanResult()
     for file_path, st in _walk_files(root, follow_symlinks=follow_symlinks, skip_hidden=skip_hidden):
         if respect_safelist and is_safe(file_path):
             result.skipped_safe += 1
             continue
-
         if st is None:
             result.error_count += 1
             continue
-
         result.files.append(FileInfo.from_stat(file_path, st))
         result.total_size += st.st_size
-
         if on_progress and result.file_count % _PROGRESS_INTERVAL == 0:
             on_progress(result.file_count, result.total_size)
+    return result
+
+
+def _walk_subtree(
+    root: Path,
+    follow_symlinks: bool,
+    skip_hidden: bool,
+) -> list[tuple[Path, os.stat_result | None]]:
+    """Walk a complete subtree, returning all file entries.
+
+    Uses _walk_files internally — safe to call from worker threads.
+    """
+    return list(_walk_files(root, follow_symlinks=follow_symlinks, skip_hidden=skip_hidden))
+
+
+def _scan_parallel(
+    root: Path,
+    *,
+    follow_symlinks: bool,
+    skip_hidden: bool,
+    respect_safelist: bool,
+    on_progress: ProgressCallback | None,
+    workers: int,
+) -> ScanResult:
+    """Multithreaded scan: each worker walks a top-level subtree."""
+    result = ScanResult()
+
+    # Phase 1: scan root dir to get root-level files and discover subtrees
+    root_files: list[tuple[Path, os.stat_result | None]] = []
+    subdirs: list[Path] = []
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if skip_hidden and entry.name.startswith("."):
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=follow_symlinks):
+                        subdirs.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=follow_symlinks):
+                        try:
+                            st = entry.stat(follow_symlinks=follow_symlinks)
+                        except OSError:
+                            st = None
+                        root_files.append((Path(entry.path), st))
+                except OSError:
+                    continue
+    except OSError:
+        pass
+
+    _process_entries(result, root_files, respect_safelist, on_progress)
+
+    if not subdirs:
+        return result
+
+    # Phase 2: walk each subtree in parallel
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(_walk_subtree, sd, follow_symlinks, skip_hidden)
+            for sd in subdirs
+        ]
+        for future in as_completed(futures):
+            _process_entries(result, future.result(), respect_safelist, on_progress)
 
     return result
 
