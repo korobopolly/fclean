@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import Confirm
 
 from fclean import __version__
-from fclean.scanner import FileInfo, scan
+from fclean.scanner import FileInfo, ProgressCallback, scan
 from fclean.cleaner import delete_files
 from fclean.reporter import (
     console,
@@ -25,6 +27,28 @@ app = typer.Typer(
     help="CLI tool for cleaning up old, large, and duplicate files.",
     no_args_is_help=True,
 )
+
+
+@contextmanager
+def _scan_progress():
+    """Yield a progress callback that drives a live Rich spinner."""
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    )
+    task_id = progress.add_task("Scanning...", total=None)
+
+    def callback(file_count: int, total_size: int) -> None:
+        progress.update(
+            task_id,
+            description=f"Scanning  {file_count:,} files  {format_size(total_size)}",
+        )
+
+    with progress:
+        yield callback
 
 
 def version_callback(value: bool) -> None:
@@ -58,8 +82,8 @@ def scan_cmd(
         console.print(f"[red]Error: '{path}' is not a directory.[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[dim]Scanning {path.resolve()}...[/dim]")
-    result = scan(path, skip_hidden=skip_hidden)
+    with _scan_progress() as on_progress:
+        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress)
     files = result.files
 
     # Apply filters
@@ -116,8 +140,8 @@ def clean(
         console.print("[red]Error: Specify at least one filter (--older-than, --larger-than, --smaller-than, --pattern).[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[dim]Scanning {path.resolve()}...[/dim]")
-    result = scan(path, skip_hidden=skip_hidden)
+    with _scan_progress() as on_progress:
+        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress)
     files = result.files
 
     if older_than:
@@ -234,8 +258,8 @@ def duplicates(
         console.print(f"[red]Error: '{path}' is not a directory.[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[dim]Scanning {path.resolve()} for duplicates...[/dim]")
-    result = scan(path, skip_hidden=skip_hidden)
+    with _scan_progress() as on_progress:
+        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress)
 
     from fclean.rules.duplicate import find_duplicates
     groups = find_duplicates(result.files, min_size=min_size)
