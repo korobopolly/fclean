@@ -29,6 +29,19 @@ app = typer.Typer(
 )
 
 
+def _resolve_workers(path: Path, workers: int) -> int:
+    """Resolve worker count. 0 = auto-detect based on filesystem type."""
+    if workers != 0:
+        return workers
+    # WSL 9P mounts (/mnt/) serialize concurrent I/O, making threads counterproductive
+    try:
+        if path.resolve().parts[1] == "mnt":
+            return 1
+    except (IndexError, OSError):
+        pass
+    return 4
+
+
 @contextmanager
 def _scan_progress():
     """Yield a progress callback that drives a live Rich spinner."""
@@ -76,6 +89,7 @@ def scan_cmd(
     pattern: Optional[list[str]] = typer.Option(None, "--pattern", "-p", help="Glob patterns to match (e.g. '*.tmp')."),
     skip_hidden: bool = typer.Option(False, "--skip-hidden", help="Skip hidden files and directories."),
     limit: int = typer.Option(20, "--limit", "-n", help="Max files to show in report."),
+    workers: int = typer.Option(0, "--workers", "-w", help="Number of threads (0=auto: 1 for WSL /mnt/, 4 otherwise)."),
 ) -> None:
     """Scan a directory and report files matching criteria."""
     if not path.is_dir():
@@ -83,7 +97,7 @@ def scan_cmd(
         raise typer.Exit(1)
 
     with _scan_progress() as on_progress:
-        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress)
+        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress, workers=_resolve_workers(path, workers))
     files = result.files
 
     # Apply filters
@@ -126,6 +140,7 @@ def clean(
     trash: bool = typer.Option(True, "--trash/--permanent", help="Move to trash (default) or permanently delete. Requires --execute."),
     skip_hidden: bool = typer.Option(False, "--skip-hidden", help="Skip hidden files and directories."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt. Requires --execute."),
+    workers: int = typer.Option(0, "--workers", "-w", help="Number of threads (0=auto: 1 for WSL /mnt/, 4 otherwise)."),
 ) -> None:
     """Show files matching criteria. Use --execute to actually delete them."""
     if config:
@@ -141,7 +156,7 @@ def clean(
         raise typer.Exit(1)
 
     with _scan_progress() as on_progress:
-        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress)
+        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress, workers=_resolve_workers(path, workers))
     files = result.files
 
     if older_than:
@@ -252,6 +267,7 @@ def duplicates(
     path: Path = typer.Argument(..., help="Directory to scan for duplicates."),
     min_size: int = typer.Option(1024, "--min-size", help="Minimum file size in bytes."),
     skip_hidden: bool = typer.Option(False, "--skip-hidden", help="Skip hidden files."),
+    workers: int = typer.Option(0, "--workers", "-w", help="Number of threads (0=auto: 1 for WSL /mnt/, 4 otherwise)."),
 ) -> None:
     """Find duplicate files."""
     if not path.is_dir():
@@ -259,7 +275,7 @@ def duplicates(
         raise typer.Exit(1)
 
     with _scan_progress() as on_progress:
-        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress)
+        result = scan(path, skip_hidden=skip_hidden, on_progress=on_progress, workers=_resolve_workers(path, workers))
 
     from fclean.rules.duplicate import find_duplicates
     groups = find_duplicates(result.files, min_size=min_size)
